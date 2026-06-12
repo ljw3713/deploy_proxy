@@ -10,6 +10,7 @@
 |---|---|---|
 | [`init-server.sh`](./init-server.sh) | **全新服务器一键部署**：Xray (VLESS+Reality / VLESS+Vision) + Hysteria2 + BBR + 证书 + 防火墙 + 日志轮转 + geo 周更 | **新机器**，从空系统开始 |
 | [`v2ray-optimize.sh`](./v2ray-optimize.sh) | **既有服务器日常维护**：清理坏 cron、更新 geo、升级 Xray、补齐 logrotate / sysctl、安装 / 重装 Hysteria2 | **老机器**，已用 `mack-a/v2ray-agent` 或本仓库 `init-server.sh` 部署过 |
+| [`renew-hysteria-cert.sh`](./renew-hysteria-cert.sh) | **Hysteria2 证书续期**：调用 acme.sh 续期 / 安装证书，修复私钥权限并重启 Hysteria2 | **证书维护**，适合放进 root cron |
 
 两个脚本使用**同一套目录布局**，可以接力使用：新机器跑 `init-server.sh`，以后日常维护跑 `v2ray-optimize.sh`。
 
@@ -52,6 +53,69 @@ bash /root/v2ray-optimize.sh --all     # 跑所有维护项（不碰 Hy2）
 ```
 
 > 因为仓库是 private，直接 `curl` 需要在 URL 里加 `?token=<PAT>` 或先 `gh auth setup-git` 后 clone。
+
+### C. Hysteria2 证书自动续期
+
+适用于 Hysteria2 使用以下证书路径的服务器：
+
+```text
+/etc/v2ray-agent/tls/<domain>.crt
+/etc/v2ray-agent/tls/<domain>.key
+```
+
+部署脚本：
+
+```bash
+curl -fsSL -o /root/renew-hysteria-cert.sh \
+  https://raw.githubusercontent.com/ljw3713/deploy_proxy/main/renew-hysteria-cert.sh
+chmod +x /root/renew-hysteria-cert.sh
+```
+
+先手动执行一次，确认续期、证书安装、权限修复和 Hysteria2 重启都正常：
+
+```bash
+DOMAIN=yehen.life bash /root/renew-hysteria-cert.sh
+```
+
+如果服务器没有 nginx，或不需要脚本在续期前停止 nginx：
+
+```bash
+DOMAIN=yehen.life STOP_WEB=0 bash /root/renew-hysteria-cert.sh
+```
+
+加入 root 定时任务：
+
+```bash
+sudo crontab -e
+```
+
+示例：每月 1 号凌晨 03:00 检查续期并重新安装证书：
+
+```cron
+0 3 1 * * DOMAIN=yehen.life /root/renew-hysteria-cert.sh >> /var/log/renew-hysteria-cert.log 2>&1
+```
+
+脚本默认值：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `DOMAIN` | `yehen.life` | 证书域名 |
+| `ACME_HOME` | `/root/.acme.sh` | acme.sh home 目录 |
+| `TLS_DIR` | `/etc/v2ray-agent/tls` | Hysteria2 证书安装目录 |
+| `HYSTERIA_SERVICE` | `hysteria-server` | Hysteria2 systemd 服务名 |
+| `HYSTERIA_GROUP` | `hysteria` | 允许读取私钥的系统组 |
+| `WEB_SERVICE` | `nginx` | 续期前可临时停止的 Web 服务 |
+| `STOP_WEB` | `1` | 是否临时停止 `WEB_SERVICE` 释放 TCP 80 |
+| `FORCE_RENEW` | `0` | 是否强制续期，调试时才建议设为 `1` |
+
+脚本执行后会把证书安装到 Hysteria2 使用的路径，并自动执行：
+
+```bash
+chown root:hysteria /etc/v2ray-agent/tls/<domain>.key /etc/v2ray-agent/tls/<domain>.crt
+chmod 640 /etc/v2ray-agent/tls/<domain>.key
+chmod 644 /etc/v2ray-agent/tls/<domain>.crt
+systemctl restart hysteria-server
+```
 
 ---
 
@@ -193,6 +257,9 @@ Xray 的 systemd unit 通过 drop-in 覆盖 `ExecStart` 为 `-confdir /etc/v2ray
 
 ## 变更记录
 
+- 2026-06-12 — 增加 Hysteria2 证书续期脚本
+  - `renew-hysteria-cert.sh`：调用 acme.sh 自动续期检查，安装证书到 Hysteria2 路径，修复权限并重启服务
+  - README 增加 root cron 部署说明
 - 2026-04-21 — 首版
   - `v2ray-optimize.sh` 维护脚本
   - `init-server.sh` 全新服务器一键部署脚本（Reality + Vision + Hy2）
